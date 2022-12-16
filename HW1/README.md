@@ -33,7 +33,7 @@ It is built with
 
 As already mentioned, the construction of this object and the methods' signatures are violating all the good OOP paradigms but are a separation solution in respect of the monolithic boilerplate we were starting with. Furthermore, I sometimes used references where c++ styled pointers were good. This increases the memory usage per run but makes super-easy the deletion process through a run with a scaling and another (the scaling is applied during the construction phase).
 
-`PointCloud` generates the 3D representation of a disparity map  and stores it in an internal `Point` representation. To
+`PointCloud` generates the 3D representation of a disparity map  and stores it in an internal `Point` representation.
 ### Solution evaluation
 To analyse the performances of the algorithm, I started from a single image processing it for various window sizes, lambda and scaling factors. After finding the more performant ones, I tested those values to see if the performance degrades or increases with other stereo couples.
 
@@ -51,7 +51,7 @@ To get generic useful informations, I started comparing the values of the three 
 - SSIM
 - NCC
 
-###Art dataset full-quality
+### Art dataset full-quality
 The first analysis I wanted to do was the performance over lambda/window size couples for the full-size image (please ignore lambda values on naive approaches).
 
 |SSD and SSIM|SSIM and NCC|
