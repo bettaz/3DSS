@@ -123,4 +123,15 @@ Here you have a table with some other image for comparison (the best algorithm f
 
 ### Processing time
 
+Here you can see how as the complexity of the algorithm increases, the execution time follows as well, with a small difference between the joint bilateral filter executed on the original size image and the joint bilateral up-sampling executed to up-sample the image to the same size so basically, using the same number of iterations.
+![Execution Time](./img/algo_execution_time.png)
+
 ### Sigmas vs quality metrics
+
+Here I plotted the 3-dimensional spacial results for the two values of sigma in respect of the quality metrics in average for all the algorithms:
+
+| Parameter               | Plot                   |
+|-------------------------|------------------------|
+| Minimum SSD: 45765300.0 | ![SSD](./img/SSD.png)  |
+| Maximum SSIM: 0.979742  | ![SSD](./img/SSIM.png) |
+| Maximum NCC: 0.998637   | ![SSD](./img/NCC.png)  |
