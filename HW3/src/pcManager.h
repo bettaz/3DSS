@@ -10,21 +10,18 @@
 #include <nanoflann.hpp>
 
 namespace pc{
-    using PointCloud = Eigen::MatrixX3d;
-    using Quaternion = Eigen::Quaterniond;
+    using PointCloud = Eigen::Matrix3Xd;
+    using Point = Eigen::Vector3d;
     using KdTree = nanoflann::KDTreeEigenMatrixAdaptor<PointCloud>;
-    using Rotation = Eigen::Transform<double,3,0>;
-    using Translation = Eigen::Translation3d;
+    using Rotation = Eigen::Quaterniond;
+    using Translation = Eigen::Vector3d;
 
 
     inline PointCloud
     vecToEigen(const std::vector<std::array<double, 3>> &src){
-        PointCloud pcOut(src.size(),3);
-        for (size_t i = 0; i < src.size(); i++) {
-            pcOut(i, 0) = src[i][0];
-            pcOut(i, 1) = src[i][1];
-            pcOut(i, 2) = src[i][2];
-        }
+        PointCloud pcOut(3,src.size());
+        for (size_t i = 0; i < src.size(); i++)
+            pcOut.col(i) = Point(src[i].data());
         return pcOut;
     };
 
@@ -32,7 +29,7 @@ namespace pc{
     inline std::vector<std::array<double, 3>>
     EigenToVec(const PointCloud &src){
         std::vector<std::array<double, 3>> pcOut;
-        for (auto line : src.rowwise()) {
+        for (auto line : src.colwise()) {
             pcOut.push_back({{line(0),line(1),line(2)}});
         }
         return pcOut;
@@ -46,8 +43,8 @@ namespace pc{
         if(mean != 0.0 && stdDev != 0.0){
             std::default_random_engine generator;
             std::normal_distribution<double> dist(mean, stdDev);
-            for(auto it : noisy.rowwise()){
-                Eigen::RowVector3d noise;
+            for(auto it : noisy.colwise()){
+                Eigen::Vector3d noise;
                 noise << dist(generator), dist(generator), dist(generator);
                 it = it + noise;
             }
@@ -58,9 +55,11 @@ namespace pc{
 
     inline PointCloud
     rotatePointCloud(const PointCloud &src, const Rotation &rotation, const Translation & translation) {
-        PointCloud out(src);
-        for(auto line : out.rowwise())
-            line = (rotation * (translation * line.transpose())).transpose();
+        PointCloud out;
+        for (auto col: out.colwise()) {
+            col = rotation * col;
+        }
+        out = out.colwise() + translation;
         return out;
     };
 
@@ -70,31 +69,23 @@ namespace pc{
         Eigen::Matrix3d covariance;
         Eigen::Vector3d center1, center2;
 
-        size_t pc1Rows = reference.rows(), pc2Rows = source.rows();
+        size_t pc1Rows = reference.cols(), pc2Rows = source.cols();
         // Calculate the center of pcl1
-        center1 = reference.colwise().mean();
+        center1 = reference.rowwise().mean();
 
         // Calculate the center of pcl2
-        center2 = source.colwise().mean();
+        center2 = source.rowwise().mean();
 
         // Move pcl1 to the center
-        reference = rotatePointCloud(reference,Rotation(Eigen::Matrix3d::Identity()), Translation(-center1));
+        reference = rotatePointCloud(reference,Rotation(Eigen::Matrix3d::Identity()), -center1);
 
         // Move pcl2 to the center
-        source = rotatePointCloud(source,Rotation(Eigen::Matrix3d::Identity()), Translation(-center2));
+        source = rotatePointCloud(source,Rotation(Eigen::Matrix3d::Identity()), -center2);
 
 
         // Calculate covariance matrix
         for (int i = 0; i < pc2Rows; i++) {
-            covariance(0, 0) += reference.row(i).x() * source.row(i).x();
-            covariance(0, 1) += reference.row(i).x() * source.row(i).y();
-            covariance(0, 2) += reference.row(i).x() * source.row(i).z();
-            covariance(1, 0) += reference.row(i).y() * source.row(i).x();
-            covariance(1, 1) += reference.row(i).y() * source.row(i).y();
-            covariance(1, 2) += reference.row(i).y() * source.row(i).z();
-            covariance(2, 0) += reference.row(i).z() * source.row(i).x();
-            covariance(2, 1) += reference.row(i).z() * source.row(i).y();
-            covariance(2, 2) += reference.row(i).z() * source.row(i).z();
+            covariance += reference.col(i) * source.col(i).transpose();
         }
         covariance /= pc1Rows;
         Eigen::MatrixXd w, u, vt;
@@ -111,13 +102,13 @@ namespace pc{
         }
 
         // Calculate the translation matrix
-        rotation = Rotation ();//(rot);
+        rotation = Rotation(rot);
         translation =Translation (center2 - (rotation * center1));
     }
 
     double computeError(const PointCloud &matrix, const PointCloud &matrix1) {
         PointCloud diff = matrix-matrix1;
-        return diff.cwiseAbs2().colwise().sum().cwiseSqrt().sum();;
+        return diff.cwiseAbs2().rowwise().sum().cwiseSqrt().sum();;
     }
 
     inline PointCloud
@@ -131,20 +122,20 @@ namespace pc{
             Rotation iterRotation;
             Translation iterTranslation;
             // construct a kd-tree index:
-            KdTree tree(3, std::cref(out), 2000);
-            PointCloud toInterpolate (reference.rows(),3);
+            KdTree tree(out.cols(), std::cref(out), 2000);
+            PointCloud toInterpolate (3,reference.cols());
             Eigen::Index closer;
             double distance;
-            for (int i=0; i<reference.rows(); i++){
-                tree.index_->knnSearch(reference.row(i).data(), 1, &closer, &distance);
-                toInterpolate.row(i) = source.row(closer);
+            for (int i=0; i<reference.cols(); i++){
+                tree.index_->knnSearch(reference.col(i).data(), 1, &closer, &distance);
+                toInterpolate.col(i) = source.col(closer);
             }
             interpolate(reference, toInterpolate, estRot, estTras);
             out = rotatePointCloud(out,iterRotation, iterTranslation);
             error = computeError(reference,out);
             std::cout<<"Error:"<<error<<std::endl;
-            estRot = estRot.rotation() * iterRotation;
-            estTras.translation() = estTras.translation() + iterTranslation.translation();
+            estRot = estRot * iterRotation;
+            estTras = estTras + iterTranslation;
             iterationCount = iter;
         }
         std::cout<<"Finished ICP!"<<std::endl;
@@ -179,7 +170,7 @@ namespace pc{
             distances.erase(distances.begin()+index,distances.end());
             TrPointCloud out(index,3);
             for (auto entry : distances) {
-                out.row(removeCount) = this->row(entry.index);
+                out.col(removeCount) = this->col(entry.index);
                 removeCount++;
             }
             out.distances = this->distances;
@@ -198,13 +189,13 @@ namespace pc{
             Rotation iterRotation;
             Translation iterTranslation;
             // construct a kd-tree index:
-            KdTree tree(3, std::cref(out), 2000);
-            TrPointCloud toInterpolate (reference.rows(),3);
+            KdTree tree(out.cols(), std::cref(out), 2000);
+            TrPointCloud toInterpolate (3 ,reference.cols());
             Eigen::Index closer;
             double distance;
-            for (int i=0; i<reference.rows(); i++){
-                tree.index_->knnSearch(reference.row(i).data(), 1, &closer, &distance);
-                toInterpolate.row(i) = source.row(closer);
+            for (int i=0; i<reference.cols(); i++){
+                tree.index_->knnSearch(reference.col(i).data(), 1, &closer, &distance);
+                toInterpolate.col(i) = source.col(closer);
                 toInterpolate.distances[i] = DistanceResult({.distance=distance, .index=i});
             }
             toInterpolate= toInterpolate.getTrimmedPointCloud(xsi);
@@ -212,12 +203,12 @@ namespace pc{
             out = rotatePointCloud(out,iterRotation, iterTranslation);
             error = computeError(reference,out);
             std::cout<<"Error:"<<error<<std::endl;
-            estRot = estRot.rotation() * iterRotation;
-            estTras.translation() = estTras.translation() + iterTranslation.translation();
+            estRot = estRot * iterRotation;
+            estTras = estTras + iterTranslation;
             iterationCount = iter;
         }
         std::cout<<"Finished Tr-ICP!"<<std::endl;
-        return PointCloud();
+        return out;
     };
 }
 #endif //THIRD_ASSIGNMENT_PCMANAGER_H
