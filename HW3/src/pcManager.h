@@ -13,8 +13,8 @@ namespace pc{
     using PointCloud = Eigen::MatrixX3d;
     using Quaternion = Eigen::Quaterniond;
     using KdTree = nanoflann::KDTreeEigenMatrixAdaptor<PointCloud>;
-    using Rotation = Eigen::Transform<double,3,0>;
-    using Translation = Eigen::Translation3d;
+    using Rotation = Eigen::Quaterniond;
+    using Translation = Eigen::Vector3d;
 
 
     inline PointCloud
@@ -60,7 +60,7 @@ namespace pc{
     rotatePointCloud(const PointCloud &src, const Rotation &rotation, const Translation & translation) {
         PointCloud out(src);
         for(auto line : out.rowwise())
-            line = (rotation * (translation * line.transpose())).transpose();
+            line = (rotation * line.transpose())+translation;
         return out;
     };
 
@@ -111,7 +111,7 @@ namespace pc{
         }
 
         // Calculate the translation matrix
-        rotation = Rotation ();//(rot);
+        rotation = (rot);
         translation =Translation (center2 - (rotation * center1));
     }
 
@@ -143,8 +143,8 @@ namespace pc{
             out = rotatePointCloud(out,iterRotation, iterTranslation);
             error = computeError(reference,out);
             std::cout<<"Error:"<<error<<std::endl;
-            estRot = estRot.rotation() * iterRotation;
-            estTras.translation() = estTras.translation() + iterTranslation.translation();
+            estRot = iterRotation * estRot;
+            estTras += iterTranslation;
             iterationCount = iter;
         }
         std::cout<<"Finished ICP!"<<std::endl;
@@ -212,8 +212,8 @@ namespace pc{
             out = rotatePointCloud(out,iterRotation, iterTranslation);
             error = computeError(reference,out);
             std::cout<<"Error:"<<error<<std::endl;
-            estRot = estRot.rotation() * iterRotation;
-            estTras.translation() = estTras.translation() + iterTranslation.translation();
+            estRot = iterRotation * estRot;
+            estTras += iterTranslation;
             iterationCount = iter;
         }
         std::cout<<"Finished Tr-ICP!"<<std::endl;

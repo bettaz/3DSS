@@ -19,7 +19,7 @@ int main(int argc, char **argv){
     double angleZ = 3.0*M_PI/180.0;
     AngleAxisd zRot = AngleAxisd(angleZ,Eigen::Vector3d ::UnitZ());
     pc::Rotation totalRotation;
-    totalRotation = (xRot * yRot * zRot);
+    totalRotation = zRot * yRot * xRot;
     pc::Translation translation(1.0,2.0,5.0);
     for(std::string fileName :fileNames){
         std::string abs = "./"+dataFolder+"/"+fileName+ext;
