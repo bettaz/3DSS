@@ -47,9 +47,7 @@ namespace pc{
             std::default_random_engine generator;
             std::normal_distribution<double> dist(mean, stdDev);
             for(auto it : noisy.rowwise()){
-                Eigen::RowVector3d noise;
-                noise << dist(generator), dist(generator), dist(generator);
-                it = it + noise;
+                it = it + Eigen::RowVector3d(dist(generator),dist(generator),dist(generator));
             }
         }
         return noisy;
