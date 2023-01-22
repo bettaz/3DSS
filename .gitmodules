@@ -1,0 +1,6 @@
+[submodule "HW3/src/happly"]
+	path = HW3/src/happly
+	url = https://github.com/nmwsharp/happly
+[submodule "HW3/src/nanoflann"]
+	path = HW3/src/nanoflann
+	url = https://github.com/jlblancoc/nanoflann
