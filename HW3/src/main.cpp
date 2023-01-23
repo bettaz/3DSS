@@ -18,9 +18,9 @@ int main(int argc, char **argv){
     AngleAxisd yRot = AngleAxisd(angleY,Eigen::Vector3d ::UnitY());
     double angleZ = 3.0*M_PI/180.0;
     AngleAxisd zRot = AngleAxisd(angleZ,Eigen::Vector3d ::UnitZ());
-    pc::Rotation totalRotation;
-    totalRotation = zRot * yRot * xRot;
-    pc::Translation translation(1.0,2.0,5.0);
+    pc::Affine rotoTranslation;
+    rotoTranslation.linear() = (zRot * yRot * xRot).toRotationMatrix();
+    rotoTranslation.translation() = pc::Translation (0.0,0.0,0.0);
     for(std::string fileName :fileNames){
         std::string abs = "./"+dataFolder+"/"+fileName+ext;
         happly::PLYData gtPLYPointCloud(abs);
@@ -34,7 +34,7 @@ int main(int argc, char **argv){
             noisyGtPLY.addVertexPositions(out);
             noisyGtPLY.write(noisyGtFileName, happly::DataFormat::ASCII);
             // Rotate
-            pc::PointCloud rotGt = pc::rotatePointCloud(gt, totalRotation, translation);
+            pc::PointCloud rotGt = pc::rotoTranslatePointCloud(gt, rotoTranslation);
             // Add Gaussian noise to the rotated one
             pc::PointCloud noisyRot = pc::addNoise(rotGt, mean, stdDev);
             happly::PLYData noisyRotPLY;
@@ -43,22 +43,21 @@ int main(int argc, char **argv){
             noisyRotPLY.addVertexPositions(out);
             noisyRotPLY.write(noisyRotFileName, happly::DataFormat::ASCII);
 
-            pc::Rotation estRot;
+            pc::Affine estRotTran;
             int iterations;
-
-            pc::PointCloud icpOut = pc::ICP(noisyGt, noisyRot, estRot,translation,iterations);
+            pc::PointCloud icpOut = pc::ICP(noisyGt, noisyRot, estRotTran,iterations, 0.5);
             happly::PLYData ICPPLY;
             out = pc::EigenToVec(icpOut);
             std::string ICPFileName = "./" + dataFolder + "/" + fileName + "ICP" + ext;
             ICPPLY.addVertexPositions(out);
             ICPPLY.write(ICPFileName, happly::DataFormat::ASCII);
 
-            pc::PointCloud trIcpOut = pc::trICP(noisyGt, noisyRot,estRot,translation,iterations,0.8);
+            /*pc::PointCloud trIcpOut = pc::trICP(noisyGt, noisyRot,estRot,translation,iterations,0.8);
             happly::PLYData TrICPPLY;
             out = pc::EigenToVec(trIcpOut);
             std::string TrICPFileName = "./" + dataFolder + "/" + fileName + "_TrICP" + ext;
             TrICPPLY.addVertexPositions(out);
-            TrICPPLY.write(TrICPFileName, happly::DataFormat::ASCII);
+            TrICPPLY.write(TrICPFileName, happly::DataFormat::ASCII);*/
 
         }
     }
