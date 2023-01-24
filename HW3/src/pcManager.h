@@ -7,32 +7,82 @@
 #include <random>
 #include <array>
 #include "Eigen/Dense"
-#include <nanoflann.hpp>
+#include "nanoflann.hpp"
+
+// Adapter from OpenGP because the nanoflann works well with horizontal vectors making the code ugly
+namespace nanoflann {
+    /// KD-tree adaptor for working with data directly stored in an Eigen Matrix, without duplicating the data storage.
+    /// This code is adapted from the KDTreeEigenMatrixAdaptor class of nanoflann.hpp
+    template <class MatrixType, int DIM = -1, class Distance = nanoflann::metric_L2, typename IndexType = int>
+    struct KDTreeAdaptor {
+        typedef KDTreeAdaptor<MatrixType,DIM,Distance> self_t;
+        typedef typename MatrixType::Scalar              num_t;
+        typedef typename Distance::template traits<num_t,self_t>::distance_t metric_t;
+        typedef KDTreeSingleIndexAdaptor< metric_t,self_t,DIM,IndexType>  index_t;
+        index_t* index;
+        KDTreeAdaptor(const MatrixType &mat, const int leaf_max_size = 10) : m_data_matrix(mat) {
+            const size_t dims = mat.rows();
+            index = new index_t( dims, *this, nanoflann::KDTreeSingleIndexAdaptorParams(leaf_max_size) );
+            index->buildIndex();
+        }
+        ~KDTreeAdaptor() {delete index;}
+        const MatrixType &m_data_matrix;
+        /// Query for the num_closest closest points to a given point (entered as query_point[0:dim-1]).
+        inline void query(const num_t *query_point, const size_t num_closest, IndexType *out_indices, num_t *out_distances_sq) const {
+            nanoflann::KNNResultSet<typename MatrixType::Scalar,IndexType> resultSet(num_closest);
+            resultSet.init(out_indices, out_distances_sq);
+            index->findNeighbors(resultSet, query_point, nanoflann::SearchParameters());
+        }
+        /// Query for the closest points to a given point (entered as query_point[0:dim-1]).
+        inline IndexType closest(const num_t *query_point) const {
+            IndexType out_indices;
+            num_t out_distances_sq;
+            query(query_point, 1, &out_indices, &out_distances_sq);
+            return out_indices;
+        }
+        const self_t & derived() const {return *this;}
+        self_t & derived() {return *this;}
+        inline size_t kdtree_get_point_count() const {return m_data_matrix.cols();}
+        /// Returns the distance between the vector "p1[0:size-1]" and the data point with index "idx_p2" stored in the class:
+        inline num_t kdtree_distance(const num_t *p1, const size_t idx_p2,size_t size) const {
+            num_t s=0;
+            for (size_t i=0; i<size; i++) {
+                const num_t d= p1[i]-m_data_matrix.coeff(i,idx_p2);
+                s+=d*d;
+            }
+            return s;
+        }
+        /// Returns the dim'th component of the idx'th point in the class:
+        inline num_t kdtree_get_pt(const size_t idx, int dim) const {
+            return m_data_matrix.coeff(dim,idx);
+        }
+        /// Optional bounding-box computation: return false to default to a standard bbox computation loop.
+        template <class BBOX> bool kdtree_get_bbox(BBOX&) const {return false;}
+    };
+}
 
 namespace pc{
-    using PointCloud = Eigen::MatrixX3d;
-    using Quaternion = Eigen::Quaterniond;
-    using KdTree = nanoflann::KDTreeEigenMatrixAdaptor<PointCloud>;
-    using Rotation = Eigen::Quaterniond;
+    using PointCloud = Eigen::Matrix3Xd;
+    using happlyPC = std::vector<std::array<double,3>>;
+    using Point = Eigen::Vector3d;
+    using KdTree = nanoflann::KDTreeAdaptor<PointCloud , 3, nanoflann::metric_L2_Simple>;
     using Translation = Eigen::Vector3d;
+    using Affine = Eigen::Affine3d;
 
 
     inline PointCloud
-    vecToEigen(const std::vector<std::array<double, 3>> &src){
-        PointCloud pcOut(src.size(),3);
-        for (size_t i = 0; i < src.size(); i++) {
-            pcOut(i, 0) = src[i][0];
-            pcOut(i, 1) = src[i][1];
-            pcOut(i, 2) = src[i][2];
-        }
+    vecToEigen(const happlyPC &src){
+        PointCloud pcOut(3,src.size());
+        for (size_t i = 0; i < src.size(); i++)
+            pcOut.col(i) = Point(src[i].data());
         return pcOut;
     };
 
 
-    inline std::vector<std::array<double, 3>>
+    inline happlyPC
     EigenToVec(const PointCloud &src){
-        std::vector<std::array<double, 3>> pcOut;
-        for (auto line : src.rowwise()) {
+        happlyPC pcOut;
+        for (auto line : src.colwise()) {
             pcOut.push_back({{line(0),line(1),line(2)}});
         }
         return pcOut;
@@ -41,13 +91,12 @@ namespace pc{
 
     inline PointCloud
     addNoise(const PointCloud &src, const double &mean, const double & stdDev) {
-        PointCloud noisy;
-        noisy = src;
-        if(mean != 0.0 && stdDev != 0.0){
+        PointCloud noisy(src);
+        if(stdDev != 0.0){
             std::default_random_engine generator;
             std::normal_distribution<double> dist(mean, stdDev);
-            for(auto it : noisy.rowwise()){
-                it = it + Eigen::RowVector3d(dist(generator),dist(generator),dist(generator));
+            for(auto it : noisy.colwise()){
+                it = it + Point(dist(generator),dist(generator),dist(generator));
             }
         }
         return noisy;
@@ -55,167 +104,166 @@ namespace pc{
 
 
     inline PointCloud
-    rotatePointCloud(const PointCloud &src, const Rotation &rotation, const Translation & translation) {
-        PointCloud out(src);
-        for(auto line : out.rowwise())
-            line = (rotation * line.transpose())+translation;
-        return out;
+    rotoTranslatePointCloud(const PointCloud &src, const Affine & rotoTranslation) {
+        return rotoTranslation*src;
     };
 
 
-    inline void
-    interpolate(PointCloud reference, PointCloud source, Rotation & rotation, Translation & translation) {
+    inline double pointDistance(const Point & p1, const Point &p2){
+        return sqrt((p1-p2).norm());
+    }
+
+
+    inline Affine
+    interpolate(PointCloud &X, PointCloud &Q) {
+        /// Calculates the centroids and center the PCs
+        Point X_mean = X.rowwise().sum()/X.cols();
+        Point Q_mean = Q.rowwise().sum()/Q.cols();
+        X.colwise() -= X_mean;
+        Q.colwise() -= Q_mean;
+        /// Compute transformation through the SVD method
+        Affine transformation;
+        std::cout<<X.rows()<<"*"<<X.cols()<<" "<<Q.rows()<<"*"<<Q.cols()<<std::endl;
         Eigen::Matrix3d covariance;
-        Eigen::Vector3d center1, center2;
-
-        size_t pc1Rows = reference.rows(), pc2Rows = source.rows();
-        // Calculate the center of pcl1
-        center1 = reference.colwise().mean();
-
-        // Calculate the center of pcl2
-        center2 = source.colwise().mean();
-
-        // Move pcl1 to the center
-        reference = rotatePointCloud(reference,Rotation(Eigen::Matrix3d::Identity()), Translation(-center1));
-
-        // Move pcl2 to the center
-        source = rotatePointCloud(source,Rotation(Eigen::Matrix3d::Identity()), Translation(-center2));
-
-
-        // Calculate covariance matrix
-        for (int i = 0; i < pc2Rows; i++) {
-            covariance(0, 0) += reference.row(i).x() * source.row(i).x();
-            covariance(0, 1) += reference.row(i).x() * source.row(i).y();
-            covariance(0, 2) += reference.row(i).x() * source.row(i).z();
-            covariance(1, 0) += reference.row(i).y() * source.row(i).x();
-            covariance(1, 1) += reference.row(i).y() * source.row(i).y();
-            covariance(1, 2) += reference.row(i).y() * source.row(i).z();
-            covariance(2, 0) += reference.row(i).z() * source.row(i).x();
-            covariance(2, 1) += reference.row(i).z() * source.row(i).y();
-            covariance(2, 2) += reference.row(i).z() * source.row(i).z();
+        if(X.cols()==Q.cols()){
+            covariance= X * Q.transpose();
         }
-        covariance /= pc1Rows;
-        Eigen::MatrixXd w, u, vt;
-        Eigen::JacobiSVD<Eigen::MatrixXd> jacobi(covariance, Eigen::ComputeThinV | Eigen::ComputeThinU);
-        jacobi.compute(covariance);
-        u=jacobi.matrixU();
-        vt=jacobi.matrixV();
-
-        // Calculate the rotation matrix
-        Eigen::Matrix3d rot = vt * u;
-        if (rot.determinant() < 0.0) {
-            vt.row(2) *= -1.0;
-            rot = vt.transpose() * u.transpose();
+        else{
+            X.block(0,0,3,Q.cols())*Q.transpose();
         }
 
-        // Calculate the translation matrix
-        rotation = (rot);
-        translation =Translation (center2 - (rotation * center1));
+        Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        if(svd.matrixU().determinant()*svd.matrixV().determinant() < 0.0) {
+            Eigen::Vector3d S = Eigen::Vector3d::Ones(); S(2) = -1.0;
+            transformation.linear().noalias() = svd.matrixV()*S.asDiagonal()*svd.matrixU().transpose();
+        } else {
+            transformation.linear().noalias() = svd.matrixV()*svd.matrixU().transpose();
+        }
+        transformation.translation().noalias() = Q_mean - transformation.linear()*X_mean;
+        /// Apply transformation
+        X = transformation*X;
+        /// Restores the previous position
+        X.colwise() += X_mean;
+        Q.colwise() += Q_mean;
+        return transformation;
     }
 
-    double computeError(const PointCloud &matrix, const PointCloud &matrix1) {
-        PointCloud diff = matrix-matrix1;
-        return diff.cwiseAbs2().colwise().sum().cwiseSqrt().sum();;
+
+    inline double computeError(const PointCloud &base, const PointCloud &reference) {
+        /// Computes distance between every point assuming they are ordered by it
+        PointCloud diff = base - reference;
+        return diff.cwiseAbs2().colwise().sum().cwiseSqrt().mean();
     }
+
 
     inline PointCloud
-    ICP(const PointCloud &reference, const PointCloud &source, Rotation & estRot, Translation &estTras, int &iterationCount, const double &epsilon=0.001, const size_t &maxIteration=100) {
-        std::cout<<"Started ICP"<<std::endl;
-        double error = epsilon+1.0;
-        PointCloud out(source);
-        estRot = Rotation();
-        estTras = Translation();
-        for (int iter = 0; iter < maxIteration && error>epsilon; ++iter) {
-            Rotation iterRotation;
-            Translation iterTranslation;
-            // construct a kd-tree index:
-            KdTree tree(3, std::cref(out), 2000);
-            PointCloud toInterpolate (reference.rows(),3);
-            Eigen::Index closer;
-            double distance;
-            for (int i=0; i<reference.rows(); i++){
-                tree.index_->knnSearch(reference.row(i).data(), 1, &closer, &distance);
-                toInterpolate.row(i) = source.row(closer);
+    ICP(const PointCloud &reference, const PointCloud &source, Affine &estRotTransformation, int &iterationCount, double & finalError, const double &epsilon=5, const size_t &maxIteration=1000) {
+        std::cout<<"Started Tr-ICP"<<std::endl;
+        /// Temporary storage point-clouds and variables
+        PointCloud ref(reference),src(source);
+        Eigen::Matrix3Xd toInterpolate = Eigen::Matrix3Xd::Zero(3, ref.cols());
+        Eigen::Matrix3Xd outPC = ref;
+        Affine iterationRotoTranslation;
+        estRotTransformation.linear() = Eigen::Matrix3d::Identity();
+        estRotTransformation.translation() = Point(0.0,0.0,0.0);
+        double prevIterationError= epsilon+1.0;
+        finalError = prevIterationError;
+        /// Generates a KdTree from the source point-cloud
+        nanoflann::KDTreeAdaptor<Eigen::Matrix3Xd, 3, nanoflann::metric_L2_Simple> kdTree(src);
+        /// ICP
+        for(int iteration=0; iteration < maxIteration; ++iteration) {
+            std::cout << "Iteration " << iteration << " / " << maxIteration << std::endl;
+            /// Find the closest point
+            for(int i=0; i < ref.cols(); ++i) {
+                toInterpolate.col(i) = src.col(kdTree.closest(ref.col(i).data()));
             }
-            interpolate(reference, toInterpolate, estRot, estTras);
-            out = rotatePointCloud(out,iterRotation, iterTranslation);
-            error = computeError(reference,out);
-            std::cout<<"Error:"<<error<<std::endl;
-            estRot = iterRotation * estRot;
-            estTras += iterTranslation;
-            iterationCount = iter;
+            /// Compute rotation and translation
+            iterationRotoTranslation = interpolate(ref, toInterpolate);
+            estRotTransformation = iterationRotoTranslation * estRotTransformation;
+            outPC = ref;
+            /// Stopping criteria
+            finalError = computeError(ref, src);
+            std::cout << "Error " << iteration << ": " << finalError << std::endl;
+            if(prevIterationError == finalError || finalError < epsilon){
+                break;
+            }
+            prevIterationError = finalError;
+            iterationCount = iteration;
+            toInterpolate.setZero();
         }
-        std::cout<<"Finished ICP!"<<std::endl;
-        return out;
+        return outPC;
     };
 
+    /// Custom PointCloud based on the Eigen::Matrix3Xd that gathers each node information to trim the pointcloud
     struct DistanceResult{
         double distance;
-        int index;
+        size_t index_s;
+        size_t index_d;
     }Distance;
     struct
     {
         bool operator()(DistanceResult a, DistanceResult b) const { return a.distance < b.distance; }
     }DistanceCriteria;
-    class TrPointCloud : public PointCloud {
-    public:
-        std::vector<DistanceResult> distances;
-        TrPointCloud(): PointCloud(){
-            distances = std::vector<DistanceResult>();
-        };
-        TrPointCloud(PointCloud p): PointCloud(p){
-            distances = std::vector<DistanceResult>(p.rows());
-        };
-        TrPointCloud(const int &x, const int &y) : PointCloud(x,y){
-            distances = std::vector<DistanceResult>(x);
+
+
+    inline PointCloud trim(const PointCloud & PC, std::vector<DistanceResult> &distances, const float &xsi){
+        std::sort(distances.begin(), distances.end(),DistanceCriteria);
+        const int total = distances.size()-1;
+        const int index = xsi * (float)total;
+        int removeCount = 0;
+        distances.erase(distances.begin()+index,distances.end());
+        PointCloud out(3,index);
+        for (auto entry : distances) {
+            out.col(removeCount) = PC.col(entry.index_d);
+            removeCount++;
         }
-        TrPointCloud getTrimmedPointCloud(const float &xsi){
-            std::sort(distances.begin(), distances.end(),DistanceCriteria);
-            const int total = distances.size();
-            const int index = xsi * (float)total;
-            int removeCount = 0;
-            distances.erase(distances.begin()+index,distances.end());
-            TrPointCloud out(index,3);
-            for (auto entry : distances) {
-                out.row(removeCount) = this->row(entry.index);
-                removeCount++;
-            }
-            out.distances = this->distances;
-            return out;
-        }
-    };
+        return out;
+    }
 
     inline PointCloud
-    trICP(const PointCloud &reference, const PointCloud &source, Rotation & estRot, Translation &estTras, int &iterationCount, const float & xsi = 0.8, const double &epsilon=0.001, const size_t &maxIteration=100){
+    trICP(const PointCloud &reference, const PointCloud &source, Affine &estRotTransformation, int &iterationCount, double & finalError, const double &epsilon=5, const size_t &maxIteration=1000, const double & xsi = 0.8){
         std::cout<<"Started Tr-ICP"<<std::endl;
-        double error = epsilon+1.0;
-        TrPointCloud out(source);
-        estRot = Rotation();
-        estTras = Translation();
-        for (int iter = 0; iter < maxIteration && error>epsilon; ++iter) {
-            Rotation iterRotation;
-            Translation iterTranslation;
-            // construct a kd-tree index:
-            KdTree tree(3, std::cref(out), 2000);
-            TrPointCloud toInterpolate (reference.rows(),3);
-            Eigen::Index closer;
-            double distance;
-            for (int i=0; i<reference.rows(); i++){
-                tree.index_->knnSearch(reference.row(i).data(), 1, &closer, &distance);
-                toInterpolate.row(i) = source.row(closer);
-                toInterpolate.distances[i] = DistanceResult({.distance=distance, .index=i});
+        /// Temporary storage point-clouds and variables
+        PointCloud ref(reference),src(source);
+        PointCloud outPC = ref;
+        Affine iterationRotoTranslation;
+        estRotTransformation.linear() = Eigen::Matrix3d::Identity();
+        estRotTransformation.translation() = Point(0.0,0.0,0.0);
+        double prevIterationError= epsilon+1.0;
+        finalError = prevIterationError;
+        /// Generates a KdTree from the source point-cloud
+        nanoflann::KDTreeAdaptor<Eigen::Matrix3Xd, 3, nanoflann::metric_L2_Simple> kdTree(src);
+        /// ICP
+        for(int iteration=0; iteration < maxIteration; ++iteration) {
+            std::cout << "Iteration " << iteration << " / " << maxIteration << std::endl;
+            /// Find the closest point and stores data for trimming
+            std::vector<DistanceResult> dist(ref.cols());
+            PointCloud toInterpolate(3,ref.cols());
+            for(size_t i=0; i < ref.cols(); ++i) {
+                std::cout<<i<<std::endl;
+                size_t closest = kdTree.closest(ref.col(i).data());
+                toInterpolate.col(i) = src.col(closest);
+                dist[i]=DistanceResult({.distance=pointDistance(ref.col(i),src.col(closest)), .index_s=i, .index_d=static_cast<size_t>(closest)});
             }
-            toInterpolate= toInterpolate.getTrimmedPointCloud(xsi);
-            interpolate(reference, toInterpolate, estRot, estTras);
-            out = rotatePointCloud(out,iterRotation, iterTranslation);
-            error = computeError(reference,out);
-            std::cout<<"Error:"<<error<<std::endl;
-            estRot = iterRotation * estRot;
-            estTras += iterTranslation;
-            iterationCount = iter;
+            /// Trimming and interpolation process
+            std::sort(dist.begin(),dist.end(),DistanceCriteria);
+            toInterpolate= trim(toInterpolate,dist,xsi);
+            /// Compute rotation and translation
+            iterationRotoTranslation = interpolate(ref, toInterpolate);
+            estRotTransformation = iterationRotoTranslation * estRotTransformation;
+            outPC = ref;
+            /// Stopping criteria
+            finalError = computeError(ref, src);
+            std::cout << "Error " << iteration << ": " << finalError << std::endl;
+            if(prevIterationError == finalError || finalError < epsilon){
+                break;
+            }
+            prevIterationError = finalError;
+            iterationCount = iteration;
+            toInterpolate.setZero();
         }
         std::cout<<"Finished Tr-ICP!"<<std::endl;
-        return PointCloud();
-    };
+        return outPC;
+    }
 }
 #endif //THIRD_ASSIGNMENT_PCMANAGER_H
