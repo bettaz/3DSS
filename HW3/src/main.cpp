@@ -30,7 +30,7 @@ void writeCSVHeader(std::ofstream &FILE) {
 }
 void writeRecord(std::ofstream &FILE, const ICPResult & result){
     FILE<<"\""<<result.filename<<"\";"
-            <<"\""<<(result.isTrimmed?"\"Tr-ICP\"":"\"ICP\"")<<";"
+            <<"\""<<(result.isTrimmed?"Tr-ICP":"ICP")<<"\";"
             <<result.iterations<<";"
             <<result.PCsize<<";"
             <<std::to_string(result.rotationX)<<";"
@@ -83,22 +83,27 @@ int main(int argc, char **argv){
         //For each rotational max
         for (auto rotLimit: rotations) {
             pc::Affine rotoTranslation;
-            double angleX = rand()/RAND_MAX*rotLimit*M_PI/180.0;
+            double angleX = static_cast<double>(rand())/RAND_MAX*rotLimit*M_PI/180.0;
             record.rotationX = angleX;
             Eigen::AngleAxisd xRot(angleX,Eigen::Vector3d ::UnitX());
-            double angleY = rand()/RAND_MAX*rotLimit*M_PI/180.0;
+            double angleY = static_cast<double>(rand())/RAND_MAX
+                            *rotLimit*M_PI/180.0;
             record.rotationY = angleY;
             Eigen::AngleAxisd yRot(angleY,Eigen::Vector3d ::UnitY());
-            double angleZ = rand()/RAND_MAX*rotLimit*M_PI/180.0;
+            double angleZ = static_cast<double>(rand())/RAND_MAX
+                            /RAND_MAX*rotLimit*M_PI/180.0;
             record.rotationZ = angleZ;
             Eigen::AngleAxisd zRot(angleZ,Eigen::Vector3d ::UnitZ());
             rotoTranslation.linear() = (zRot * yRot * xRot).toRotationMatrix();
             // For each translational maximum
             for (auto transLimit: translations) {
                 rotoTranslation.translation() = pc::Translation (
-                        (rand()/RAND_MAX)*transLimit*spaceRange,
-                        (rand()/RAND_MAX)*transLimit*spaceRange,
-                        (rand()/RAND_MAX)*transLimit)*spaceRange;
+                        (static_cast<double>(rand())/RAND_MAX
+                        )*transLimit*spaceRange,
+                        (static_cast<double>(rand())/RAND_MAX
+                        )*transLimit*spaceRange,
+                        (static_cast<double>(rand())/RAND_MAX
+                        )*transLimit)*spaceRange;
                 record.transX = rotoTranslation.translation().coeff(0);
                 record.transY = rotoTranslation.translation().coeff(1);
                 record.transZ = rotoTranslation.translation().coeff(2);
@@ -107,7 +112,7 @@ int main(int argc, char **argv){
                     // Add Gaussian noise to GT proportionally to the spacial size of the pointcloud
                     double stdDev = spaceRange*influence;
                     record.noiseVariance = stdDev;
-                    pc::PointCloud noisyGt = gt;//pc::addNoise(gt,mean,stdDev);
+                    pc::PointCloud gt2(gt);
                     happly::PLYData noisyGtPLY;
                     pc::happlyPC out = pc::EigenToVec(noisyGt);
                     std::string noisyGtFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string(rotLimit)+"T"+ std::to_string(transLimit)+"N"+std::to_string(influence)+ "_noisy" + ext;
@@ -126,10 +131,10 @@ int main(int argc, char **argv){
                     pc::Affine estRotTran;
                     int iterations;
                     double error;
-                    record.isTrimmed = false;
                     auto start = std::chrono::high_resolution_clock::now();
-                    pc::PointCloud icpOut = pc::ICP(noisyGt, noisyRot, estRotTran,iterations, error, 1e-5);
+                    pc::PointCloud icpOut = pc::ICP(gt, noisyRot, estRotTran,iterations, error, 1e-5);
                     auto end = std::chrono::high_resolution_clock::now();
+                    record.isTrimmed = false;
                     record.iterations = iterations;
                     record.totalError = error;
                     std::array<double,6> res = calculateRotTransErr(rotoTranslation, estRotTran);
@@ -150,8 +155,9 @@ int main(int argc, char **argv){
                     ICPPLY.write(ICPFileName, happly::DataFormat::ASCII);
 
                     start = std::chrono::high_resolution_clock::now();
-                    pc::PointCloud trIcpOut = pc::trICP(noisyGt, noisyRot,estRotTran,iterations,error);
+                    pc::PointCloud trIcpOut = pc::trICP(gt2, noisyRot, estRotTran, iterations, error, 1e-5);
                     end = std::chrono::high_resolution_clock::now();
+                    record.isTrimmed= true;
                     record.iterations = iterations;
                     record.totalError = error;
                     res = calculateRotTransErr(rotoTranslation, estRotTran);
