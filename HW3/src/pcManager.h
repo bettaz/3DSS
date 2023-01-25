@@ -115,7 +115,7 @@ namespace pc{
 
 
     inline Affine
-    interpolate(PointCloud &X, PointCloud &Q) {
+    interpolate(PointCloud &X, PointCloud &Q ) {
         /// Calculates the centroids and centers both PCs
         Point X_mean = X.rowwise().sum()/X.cols();
         Point Q_mean = Q.rowwise().sum()/Q.cols();
@@ -157,7 +157,7 @@ namespace pc{
 
     inline PointCloud
     ICP(const PointCloud &reference, const PointCloud &source, Affine &estRotTransformation, int &iterationCount, double & finalError, const double &epsilon=0.5, const size_t &maxIteration=1000) {
-        std::cout<<"Started Tr-ICP"<<std::endl;
+        std::cout<<"Started ICP"<<std::endl;
         /// Temporary storage point-clouds and variables
         PointCloud ref(reference),src(source);
         Eigen::Matrix3Xd toInterpolate = Eigen::Matrix3Xd::Zero(3, ref.cols());
@@ -169,6 +169,7 @@ namespace pc{
         finalError = prevIterationError;
         /// Generates a KdTree from the source point-cloud
         KdTree kdTree(src);
+        int stopping = 0;
         /// ICP
         for(int iteration=0; iteration < maxIteration; ++iteration) {
             std::cout << "Iteration " << iteration << " / " << maxIteration << std::endl;
@@ -176,13 +177,14 @@ namespace pc{
             for(int i=0; i < ref.cols(); ++i) {
                 toInterpolate.col(i) = src.col(kdTree.closest(ref.col(i).data()));
             }
+            /// Stopping criteria
             /// Compute rotation and translation
             iterationRotoTranslation = interpolate(ref, toInterpolate);
-            estRotTransformation = iterationRotoTranslation * estRotTransformation;
-            outPC = ref;
-            /// Stopping criteria
             finalError = computeError(ref, src);
             std::cout << "Error " << iteration << ": " << finalError << std::endl;
+            estRotTransformation = iterationRotoTranslation * estRotTransformation;
+            outPC = ref;
+            /// Checks convergence
             if(prevIterationError == finalError || finalError < epsilon){
                 break;
             }
@@ -190,6 +192,7 @@ namespace pc{
             iterationCount = iteration;
             toInterpolate.setZero();
         }
+        std::cout<<"End ICP"<<std::endl;
         return outPC;
     };
 
@@ -205,25 +208,28 @@ namespace pc{
     }DistanceCriteria;
 
 
-    inline PointCloud trim(const PointCloud & PC, std::vector<DistanceResult> &distances, const float &xsi){
+    inline PointCloud trim(PointCloud & ref, const PointCloud & src, std::vector<DistanceResult> &distances, const float &xsi){
         std::sort(distances.begin(), distances.end(),DistanceCriteria);
-        const int total = distances.size()-1;
-        const int index = xsi * (float)total;
-        int removeCount = 0;
+        const int total = distances.size();
+        const int index = (xsi * (float)total)-1;
         distances.erase(distances.begin()+index,distances.end());
-        PointCloud out(3,index);
-        for (auto entry : distances) {
-            out.col(removeCount) = PC.col(entry.index_d);
-            removeCount++;
+        PointCloud newRef(3, total);
+        PointCloud outSrc(3, total);
+        for(size_t i = 0; i<total; i++){
+            newRef.col(i) = ref.col(distances[i].index_d);
+            outSrc.col(i) = src.col(distances[i].index_s);
         }
-        return out;
+        ref = newRef;
+        return outSrc;
     }
+
 
     inline PointCloud
     trICP(const PointCloud &reference, const PointCloud &source, Affine &estRotTransformation, int &iterationCount, double & finalError, const double &epsilon=0.5, const float &xsi = 0.8, const size_t &maxIteration=1000){
         std::cout<<"Started Tr-ICP"<<std::endl;
         /// Temporary storage point-clouds and variables
         PointCloud ref(reference),src(source);
+        PointCloud toInterpolate = Eigen::Matrix3Xd::Zero(3, ref.cols());
         PointCloud outPC = ref;
         Affine iterationRotoTranslation;
         estRotTransformation.linear() = Eigen::Matrix3d::Identity();
@@ -235,32 +241,33 @@ namespace pc{
         /// ICP
         for(int iteration=0; iteration < maxIteration; ++iteration) {
             std::cout << "Iteration " << iteration << " / " << maxIteration << std::endl;
+            toInterpolate = PointCloud::Zero(3, ref.cols());
             /// Find the closest point and stores data for trimming
-            std::vector<DistanceResult> dist(ref.cols());
-            PointCloud toInterpolate(3,ref.cols());
+            std::vector<DistanceResult> dist;
             for(size_t i=0; i < ref.cols(); ++i) {
-                std::cout<<i<<std::endl;
                 size_t closest = kdTree.closest(ref.col(i).data());
-                toInterpolate.col(i) = src.col(closest);
-                dist[i]=DistanceResult({.distance=pointDistance(ref.col(i),src.col(closest)), .index_s=i, .index_d=static_cast<size_t>(closest)});
+                dist.push_back(DistanceResult({.distance=pointDistance(ref.col(i), src.col(closest)), .index_s=i, .index_d=static_cast<size_t>(closest)}));
             }
             /// Trimming and interpolation process
-            toInterpolate= trim(toInterpolate,dist,xsi);
+            PointCloud trimRef(ref);
+            toInterpolate = trim(trimRef, src , dist, xsi);
             /// Compute rotation and translation
-            iterationRotoTranslation = interpolate(ref, toInterpolate);
+            iterationRotoTranslation = interpolate(trimRef, toInterpolate);
             estRotTransformation = iterationRotoTranslation * estRotTransformation;
+            /// Apply transform to the original reference PC
+            ref = iterationRotoTranslation * ref;
             outPC = ref;
             /// Stopping criteria
             finalError = computeError(ref, src);
             std::cout << "Error " << iteration << ": " << finalError << std::endl;
-            if(prevIterationError == finalError || finalError < epsilon){
+            if(prevIterationError == finalError || finalError < epsilon || prevIterationError+epsilon< finalError){
                 break;
             }
             prevIterationError = finalError;
             iterationCount = iteration;
-            toInterpolate.setZero();
+            dist.empty();
         }
-        std::cout<<"Finished Tr-ICP!"<<std::endl;
+        std::cout<<"End Tr-ICP!"<<std::endl;
         return outPC;
     }
 }

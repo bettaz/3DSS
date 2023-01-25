@@ -65,7 +65,7 @@ int main(int argc, char **argv){
     std::vector<std::string> fileNames = {"airplane","ant","beethoven"};
     std::vector<double> noiseInfluences = {0.0,0.02,0.07};
     std::vector<double> rotations = {5.0,20.0,50.0};
-    std::vector<double> translations = {10.0,100.0,1000.0};
+    std::vector<double> translations = {0.0,0.01,0.02};
     std::string ext = ".ply";
     std::string dataFolder = "data";
     std::ofstream file("./data/results.csv");
@@ -79,7 +79,7 @@ int main(int argc, char **argv){
         pc::PointCloud gt = pc::vecToEigen(gtPLYPointCloud.getVertexPositions());
         record.filename = fileName;
         record.PCsize = gt.cols();
-        double spaceRange = (gt.cwiseAbs().colwise().maxCoeff()-(gt.colwise().sum()/gt.cols())).maxCoeff();
+        pc::Point spaceRange = gt.rowwise().maxCoeff()-gt.rowwise().minCoeff();
         //For each rotational max
         for (auto rotLimit: rotations) {
             pc::Affine rotoTranslation;
@@ -91,7 +91,7 @@ int main(int argc, char **argv){
             record.rotationY = angleY;
             Eigen::AngleAxisd yRot(angleY,Eigen::Vector3d ::UnitY());
             double angleZ = static_cast<double>(rand())/RAND_MAX
-                            /RAND_MAX*rotLimit*M_PI/180.0;
+                            *rotLimit*M_PI/180.0;
             record.rotationZ = angleZ;
             Eigen::AngleAxisd zRot(angleZ,Eigen::Vector3d ::UnitZ());
             rotoTranslation.linear() = (zRot * yRot * xRot).toRotationMatrix();
@@ -99,25 +99,25 @@ int main(int argc, char **argv){
             for (auto transLimit: translations) {
                 rotoTranslation.translation() = pc::Translation (
                         (static_cast<double>(rand())/RAND_MAX
-                        )*transLimit*spaceRange,
+                        )*transLimit*spaceRange(0),
                         (static_cast<double>(rand())/RAND_MAX
-                        )*transLimit*spaceRange,
+                        )*transLimit*spaceRange(1),
                         (static_cast<double>(rand())/RAND_MAX
-                        )*transLimit)*spaceRange;
+                        )*transLimit)*spaceRange(2);
                 record.transX = rotoTranslation.translation().coeff(0);
                 record.transY = rotoTranslation.translation().coeff(1);
                 record.transZ = rotoTranslation.translation().coeff(2);
                 //For each noise variance
                 for(double influence : noiseInfluences){
                     // Add Gaussian noise to GT proportionally to the spacial size of the pointcloud
-                    double stdDev = spaceRange*influence;
+                    double stdDev = spaceRange.mean()*influence;
                     record.noiseVariance = stdDev;
                     pc::PointCloud gt2(gt);
-                    happly::PLYData noisyGtPLY;
-                    pc::happlyPC out = pc::EigenToVec(noisyGt);
+                    happly::PLYData GtPLY;
+                    pc::happlyPC out = pc::EigenToVec(gt);
                     std::string noisyGtFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string(rotLimit)+"T"+ std::to_string(transLimit)+"N"+std::to_string(influence)+ "_noisy" + ext;
-                    noisyGtPLY.addVertexPositions(out);
-                    noisyGtPLY.write(noisyGtFileName, happly::DataFormat::ASCII);
+                    GtPLY.addVertexPositions(out);
+                    GtPLY.write(noisyGtFileName, happly::DataFormat::ASCII);
                     // Rotate
                     pc::PointCloud rotGt = pc::rotoTranslatePointCloud(gt, rotoTranslation);
                     // Add Gaussian noise to the rotated one
@@ -131,9 +131,9 @@ int main(int argc, char **argv){
                     pc::Affine estRotTran;
                     int iterations;
                     double error;
-                    auto start = std::chrono::high_resolution_clock::now();
-                    pc::PointCloud icpOut = pc::ICP(gt, noisyRot, estRotTran,iterations, error, 1e-5);
-                    auto end = std::chrono::high_resolution_clock::now();
+                    auto start_ICP = std::chrono::high_resolution_clock::now();
+                    pc::PointCloud icpOut = pc::ICP(gt, noisyRot, estRotTran,iterations, error, 1e-4);
+                    auto end_ICP = std::chrono::high_resolution_clock::now();
                     record.isTrimmed = false;
                     record.iterations = iterations;
                     record.totalError = error;
@@ -144,7 +144,7 @@ int main(int argc, char **argv){
                     record.tranEstErrX = res[3];
                     record.tranEstErrY = res[4];
                     record.tranEstErrZ = res[5];
-                    record.executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count();
+                    record.executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(end_ICP-start_ICP).count();
                     writeRecord(file,record);
 
 
@@ -154,9 +154,9 @@ int main(int argc, char **argv){
                     ICPPLY.addVertexPositions(out);
                     ICPPLY.write(ICPFileName, happly::DataFormat::ASCII);
 
-                    start = std::chrono::high_resolution_clock::now();
+                    auto start_Tr = std::chrono::high_resolution_clock::now();
                     pc::PointCloud trIcpOut = pc::trICP(gt2, noisyRot, estRotTran, iterations, error, 1e-5);
-                    end = std::chrono::high_resolution_clock::now();
+                    auto end_Tr = std::chrono::high_resolution_clock::now();
                     record.isTrimmed= true;
                     record.iterations = iterations;
                     record.totalError = error;
@@ -167,7 +167,7 @@ int main(int argc, char **argv){
                     record.tranEstErrX = res[3];
                     record.tranEstErrY = res[4];
                     record.tranEstErrZ = res[5];
-                    record.executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count();
+                    record.executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(end_Tr-start_Tr).count();
                     writeRecord(file,record);
                     happly::PLYData TrICPPLY;
                     out = pc::EigenToVec(trIcpOut);
