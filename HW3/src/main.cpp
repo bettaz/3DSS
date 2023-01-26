@@ -20,12 +20,14 @@ struct ICPResult{
     double tranEstErrX;
     double tranEstErrY;
     double tranEstErrZ;
+    double rotPerc;
+    double transPerc;
     double noiseVariance;
     double totalError;
     size_t executionTime;
 }Result;
 void writeCSVHeader(std::ofstream &FILE) {
-    const std::string out = "\"fileName\",\"isTrimmed\";\"iterations\";\"PCSize\";\"rotationX\";\"rotationY\";\"rotationZ\";\"rotEstErrX\";\"rotEstErrY\";\"rotEstErrZ\";\"transX\";\" transY\";\"transZ\";\"tranEstErrX\";\"tranEstErrY\";\"tranEstErrZ\";\"noiseVariance\";\"totalError\";\"executionTime\"";
+    const std::string out = "\"fileName\",\"isTrimmed\";\"iterations\";\"PCSize\";\"rotationX\";\"rotationY\";\"rotationZ\";\"rotEstErrX\";\"rotEstErrY\";\"rotEstErrZ\";\"transX\";\" transY\";\"transZ\";\"tranEstErrX\";\"tranEstErrY\";\"tranEstErrZ\";\"rotationPercentage\";\"translationPercentage\";\"noiseVariance\";\"totalError\";\"executionTime\"";
     FILE<<out<<std::endl;
 }
 void writeRecord(std::ofstream &FILE, const ICPResult & result){
@@ -45,6 +47,8 @@ void writeRecord(std::ofstream &FILE, const ICPResult & result){
             <<std::to_string(result.tranEstErrX)<<";"
             <<std::to_string(result.tranEstErrY)<<";"
             <<std::to_string(result.tranEstErrZ)<<";"
+            <<std::to_string(result.rotPerc)<<";"
+            <<std::to_string(result.transPerc)<<";"
             <<std::to_string(result.noiseVariance)<<";"
             <<std::to_string(result.totalError)<<";"
             <<std::to_string(result.executionTime)<<std::endl;
@@ -82,6 +86,7 @@ int main(int argc, char **argv){
         pc::Point spaceRange = gt.rowwise().maxCoeff()-gt.rowwise().minCoeff();
         //For each rotational max
         for (auto rotLimit: rotations) {
+            record.rotPerc = rotLimit;
             pc::Affine rotoTranslation;
             double angleX = static_cast<double>(rand())/RAND_MAX*rotLimit*M_PI/180.0;
             record.rotationX = angleX;
@@ -97,6 +102,7 @@ int main(int argc, char **argv){
             rotoTranslation.linear() = (zRot * yRot * xRot).toRotationMatrix();
             // For each translational maximum
             for (auto transLimit: translations) {
+                record.transPerc = transLimit;
                 rotoTranslation.translation() = pc::Translation (
                         (static_cast<double>(rand())/RAND_MAX
                         )*transLimit*spaceRange(0),
@@ -115,7 +121,7 @@ int main(int argc, char **argv){
                     pc::PointCloud gt2(gt);
                     happly::PLYData GtPLY;
                     pc::happlyPC out = pc::EigenToVec(gt);
-                    std::string noisyGtFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string(rotLimit)+"T"+ std::to_string(transLimit)+"N"+std::to_string(influence)+ "_noisy" + ext;
+                    std::string noisyGtFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string((int)rotLimit)+"T"+ std::to_string((int)(transLimit*100.0))+"N"+std::to_string((int)(influence*100.0))+ "_noisy" + ext;
                     GtPLY.addVertexPositions(out);
                     GtPLY.write(noisyGtFileName, happly::DataFormat::ASCII);
                     // Rotate
@@ -124,7 +130,7 @@ int main(int argc, char **argv){
                     pc::PointCloud noisyRot = pc::addNoise(rotGt, 0.0, stdDev);
                     happly::PLYData noisyRotPLY;
                     out = pc::EigenToVec(noisyRot);
-                    std::string noisyRotFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string(rotLimit)+"T"+ std::to_string(transLimit)+"N"+std::to_string(influence)+ "_noisy_rotated" + ext;
+                    std::string noisyRotFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string((int)rotLimit)+"T"+ std::to_string((int)(transLimit*100.0))+"N"+std::to_string((int)(influence*100.0))+ "_noisy_rotated" + ext;
                     noisyRotPLY.addVertexPositions(out);
                     noisyRotPLY.write(noisyRotFileName, happly::DataFormat::ASCII);
 
@@ -132,7 +138,7 @@ int main(int argc, char **argv){
                     int iterations;
                     double error;
                     auto start_ICP = std::chrono::high_resolution_clock::now();
-                    pc::PointCloud icpOut = pc::ICP(gt, noisyRot, estRotTran,iterations, error, 1e-4);
+                    pc::PointCloud icpOut = pc::ICP(gt, noisyRot, estRotTran,iterations, error, 1e-5);
                     auto end_ICP = std::chrono::high_resolution_clock::now();
                     record.isTrimmed = false;
                     record.iterations = iterations;
@@ -150,7 +156,7 @@ int main(int argc, char **argv){
 
                     happly::PLYData ICPPLY;
                     out = pc::EigenToVec(icpOut);
-                    std::string ICPFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string(rotLimit)+"T"+ std::to_string(transLimit)+"N"+std::to_string(influence)+ "ICP" + ext;
+                    std::string ICPFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string((int)rotLimit)+"T"+ std::to_string((int)(transLimit*100.0))+"N"+std::to_string((int)(influence*100.0))+ "ICP" + ext;
                     ICPPLY.addVertexPositions(out);
                     ICPPLY.write(ICPFileName, happly::DataFormat::ASCII);
 
@@ -171,7 +177,7 @@ int main(int argc, char **argv){
                     writeRecord(file,record);
                     happly::PLYData TrICPPLY;
                     out = pc::EigenToVec(trIcpOut);
-                    std::string TrICPFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string(rotLimit)+"T"+ std::to_string(transLimit)+"N"+std::to_string(influence)+ "_TrICP" + ext;
+                    std::string TrICPFileName = "./" + dataFolder + "/" + fileName +"R"+ std::to_string((int)rotLimit)+"T"+ std::to_string((int)(transLimit*100.0))+"N"+std::to_string((int)(influence*100.0))+ "_TrICP" + ext;
                     TrICPPLY.addVertexPositions(out);
                     TrICPPLY.write(TrICPFileName, happly::DataFormat::ASCII);
                     file.flush();
